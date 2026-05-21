@@ -6,18 +6,18 @@ static NSString* const LFMBaseURL = @"https://ws.audioscrobbler.com/2.0";
 @implementation LFMClient
 	+ (NSString*) makeSignature:(NSDictionary<NSString*, NSString*>*)parameters secret:(NSString*)secret {
 		NSArray *sortedParamKeys = [[parameters allKeys] sortedArrayUsingSelector:@selector(compare:)];
-    NSMutableString *signature = [[NSMutableString alloc] init];
+		NSMutableString *signature = [[NSMutableString alloc] init];
 
 		for (NSString *key in sortedParamKeys) {
 			if ([key isEqualToString:@"format"]) continue;
 
 			NSString *str = [NSString stringWithFormat:@"%@%@", key, [parameters objectForKey:key]];
 			[signature appendString:str];
-    }
+		}
 
-    [signature appendString:secret];
+		[signature appendString:secret];
 
-    return [LFMClient md5:signature];
+		return [LFMClient md5:signature];
 	}
 
 	+ (void) handleBrowserExit {
@@ -28,7 +28,7 @@ static NSString* const LFMBaseURL = @"https://ws.audioscrobbler.com/2.0";
 		[LFMClient postSongDataToAPI:@{
 			@"artist": artist,
 			@"track": track,
-			@"duration": [NSNumber numberWithDouble:duration],
+			@"duration": [NSString stringWithFormat:@"%d", (int)duration],  // ✅ string, not NSNumber
 			@"album": @"",
 			@"album_artist": artist,
 			@"method": @"track.updateNowPlaying"
@@ -39,13 +39,13 @@ static NSString* const LFMBaseURL = @"https://ws.audioscrobbler.com/2.0";
 		NSDate *date = [NSDate date];
 		NSTimeInterval unix = [date timeIntervalSince1970];
 
-		double fixed = trunc((unix - elapsed));
+		long fixed = (long)trunc(unix - elapsed);  // ✅ integer, not double
 
 		[LFMClient postSongDataToAPI:@{
 			@"artist": artist,
 			@"track": track,
-			@"duration": [NSNumber numberWithDouble:duration],
-			@"timestamp": [NSNumber numberWithDouble:fixed],
+			@"duration": [NSString stringWithFormat:@"%d", (int)duration],    // ✅ string, not NSNumber
+			@"timestamp": [NSString stringWithFormat:@"%ld", fixed],          // ✅ string, integer
 			@"album": @"",
 			@"album_artist": artist,
 			@"method": @"track.scrobble"
@@ -209,8 +209,8 @@ static NSString* const LFMBaseURL = @"https://ws.audioscrobbler.com/2.0";
 
 		dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
 		__block NSURLResponse *response;
-    __block NSError *error;
-    __block NSData *data;
+		__block NSError *error;
+		__block NSData *data;
 
 		NSURLSession *session = [NSURLSession sharedSession];
 		NSURLSessionDataTask *dataTask = [session dataTaskWithRequest:request
@@ -260,9 +260,9 @@ static NSString* const LFMBaseURL = @"https://ws.audioscrobbler.com/2.0";
 		if ([str isKindOfClass:[NSString class]]) {
 			NSCharacterSet *allowed = [[NSCharacterSet characterSetWithCharactersInString:@"&+, \"#%<>[\\]^`{|}"] invertedSet];
 			return [str stringByAddingPercentEncodingWithAllowedCharacters:allowed];
-    }
+		}
 
-    return str;
+		return str;
 	}
 
 	#pragma clang diagnostic push
