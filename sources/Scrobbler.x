@@ -2,63 +2,69 @@
 #import <MediaPlayer/MediaPlayer.h>
 
 static NSString *currentSongLocalID = @"";
+static NSString *currentTrack = @"";
+static NSString *currentArtist = @"";
 static double currentTotalMediaTime = 0;
-static BOOL currentSongReplayed = NO;
+static double trackedElapsed = 0;        // our own elapsed counter
 static NSTimer *timer = nil;
 static BOOL scrobbled = NO;
 static BOOL isPlaying = NO;
 
 @implementation LFMScrobbler
 
++ (void) scrobbleCurrentIfEligible {
+    if (!scrobbled && currentTotalMediaTime > 0 && trackedElapsed >= (currentTotalMediaTime / 2)) {
+        NSLog(@"[LFM] Scrobbling: %@ - %@ (elapsed: %.0fs / %.0fs)", currentArtist, currentTrack, trackedElapsed, currentTotalMediaTime);
+        [LFMClient scrobble:currentTrack artist:currentArtist duration:currentTotalMediaTime elapsed:trackedElapsed];
+        scrobbled = YES;
+    }
+}
+
 + (void) poll {
     dispatch_async(dispatch_get_main_queue(), ^{
-        // Use MPNowPlayingInfoCenter — stable across YT Music updates
         MPNowPlayingInfoCenter *center = [MPNowPlayingInfoCenter defaultCenter];
         NSDictionary *info = [center nowPlayingInfo];
 
-        NSString *artist = info[MPMediaItemPropertyArtist];
-        NSString *track  = info[MPMediaItemPropertyTitle];
-        NSNumber *durationNum = info[MPMediaItemPropertyPlaybackDuration];
+        NSString *artist   = info[MPMediaItemPropertyArtist];
+        NSString *track    = info[MPMediaItemPropertyTitle];
+        double duration    = [info[MPMediaItemPropertyPlaybackDuration] doubleValue];
+        double rate        = [info[MPNowPlayingInfoPropertyPlaybackRate] doubleValue];
 
-        // Guard against nil metadata (e.g. during buffering)
-        if (!artist || !track) {
-            NSLog(@"[LFM] Metadata not available yet (artist=%@, track=%@)", artist, track);
+        if (!artist || !track || duration <= 0) {
+            NSLog(@"[LFM] Metadata not available yet (artist=%@, track=%@, duration=%.0f)", artist, track, duration);
             return;
         }
 
-        // Still use the internal controller for localID + mediaTime
+        // Use localID for song-change detection, fall back to track name
         YTQueueController *controller = [LFMYouTubeInstances queueController];
         YTQueueItem *item             = [controller nowPlayingMusicQueueItem];
-        NSString *localID             = [item localID] ?: track; // fall back to track name if localID is nil
-        double mediaTime              = [controller nowPlayingVideoMediaTime];
+        NSString *localID             = [item localID] ?: track;
 
-        // Use duration from MPNowPlayingInfo if internal API gives 0
-        if (durationNum && currentTotalMediaTime <= 0) {
-            currentTotalMediaTime = [durationNum doubleValue];
-        }
+        BOOL songChanged = ![localID isEqualToString:currentSongLocalID];
 
-        // ✅ Fixed: use isEqualToString: instead of ==
-        if ((!currentSongReplayed && [currentSongLocalID isEqualToString:localID] && mediaTime < 1) && isPlaying) {
-            currentSongReplayed = YES;
-        }
+        if (songChanged) {
+            // Attempt to scrobble the previous song before switching
+            [LFMScrobbler scrobbleCurrentIfEligible];
 
-        if ((![localID isEqualToString:currentSongLocalID] || mediaTime > 1) && isPlaying) {
-            currentSongReplayed = NO;
-        }
+            NSLog(@"[LFM] Now Playing: %@ - %@ (duration: %.0fs)", artist, track, duration);
 
-        if ((![localID isEqualToString:currentSongLocalID] || currentSongReplayed) && isPlaying) {
-            NSLog(@"[LFM] Now Playing: %@ - %@", artist, track);
+            // Reset state for new song
+            currentSongLocalID    = localID;
+            currentTrack          = track;
+            currentArtist         = artist;
+            currentTotalMediaTime = duration;
+            trackedElapsed        = 0;
+            scrobbled             = NO;
 
-            scrobbled = NO;
-            currentSongLocalID = localID;
-            [LFMClient setNowPlaying:track artist:artist duration:currentTotalMediaTime];
-        }
+            [LFMClient setNowPlaying:track artist:artist duration:duration];
+        } else {
+            // Tick elapsed forward only while actually playing
+            if (isPlaying && rate > 0) {
+                trackedElapsed += 1.0;
+            }
 
-        if (!scrobbled && isPlaying && currentTotalMediaTime > 0 && mediaTime >= (currentTotalMediaTime / 2)) {
-            NSLog(@"[LFM] Scrobbling: %@ - %@", artist, track);
-
-            [LFMClient scrobble:track artist:artist duration:currentTotalMediaTime elapsed:mediaTime];
-            scrobbled = YES;
+            // Check scrobble threshold
+            [LFMScrobbler scrobbleCurrentIfEligible];
         }
     });
 }
@@ -70,7 +76,6 @@ static BOOL isPlaying = NO;
 - (void) playerStateDidChangeFrom:(NSInteger*)from to:(NSInteger*)to {
     %orig;
 
-    // 3 = Playing
     if ((int)(size_t)to == 3) {
         isPlaying = TRUE;
 
